@@ -16,8 +16,15 @@ import sys
 from pathlib import Path
 
 
-
 def extract_text_from_pdf(pdf_path: str) -> str:
+    """
+    Strategy:
+    1. Run OCR (pdf2image + Tesseract) on first 2 pages — captures filled-in values
+       in image-based PDFs (ACORD forms, scanned docs).
+    2. Run pdfplumber for text-layer PDFs — faster and more structured.
+    3. If OCR yields meaningful content (has lowercase or digits beyond just labels),
+       prefer it. Otherwise fall back to pdfplumber.
+    """
     ocr_text   = _ocr_pdf(pdf_path)
     text_layer = ""
 
@@ -34,7 +41,8 @@ def extract_text_from_pdf(pdf_path: str) -> str:
     except Exception as e:
         print(f"  [warn] pdfplumber failed: {e}")
 
-   
+    # OCR is preferred when it has actual filled-in content (mixed case text,
+    # email addresses, numbers embedded in context, etc.)
     def has_filled_content(txt: str) -> bool:
         """Heuristic: text has lowercase words or email-like patterns → filled form."""
         lower_words = re.findall(r'[a-z]{3,}', txt)
