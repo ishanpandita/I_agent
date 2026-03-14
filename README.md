@@ -1,41 +1,78 @@
-===============Ishan pandita=================================
 
-Git Clone:
-after that cd I_agent
+**Author: Ishan Pandita**
 
-libraries: pdfplumber pdf2image pytesseract poppler 
+---
 
-if windows:
-as i am using windows we have to manually install poppler and tesseract add that in system path 
-else in mac:
-brew install poppler tesseract in terminal 
+## Getting Started
 
-TO Verify installations:
+### Clone the Repository
+```bash
+git clone https://github.com/ishanpandita/I_agent.git
+cd I_agent
+```
 
-Windows: "tesseract --version"   and   "pdftoppm -v"
+---
 
-Mac: 
-which tesseract — Shows the path (usually /opt/homebrew/bin/tesseract on Apple Silicon).
-tesseract -v 
-For Poppler:
-pdftoppm -v — 
+## Libraries Required
+- pdfplumber
+- pdf2image
+- pytesseract
+- poppler
 
+---
 
+## Install System Dependencies
 
-Create virtual environment: python -m venv venv
+**If windows:**
+as i am using we have to install these manually and add in system path in system variables
+- Tesseract → https://github.com/UB-Mannheim/tesseract/wiki
+- Poppler → https://github.com/oschwartz10612/poppler-windows/releases
 
-Install Python Libraries
-bash
+**else in Mac:**
+```bash
+brew install poppler tesseract
+```
+
+---
+
+## Verify Installations
+
+**Windows:**
+```bash
+tesseract --version
+pdftoppm -v
+```
+
+**Mac:**
+```bash
+which tesseract
+tesseract -v
+pdftoppm -v
+```
+
+---Create Virtual Environment
+```bash
+python -m venv venv
+```
+
+---
+
+## Install Python Libraries
+```bash
 pip install -r requirements.txt
-verify requirements.txt has libraries like pdf2image pytesseract pdfplumber
+```
+requirements.txt contains: pdf2image, pytesseract, pdfplumber
 
+---
 
-BASH: 
+## Run
+```bash
 python agent.py --input input_docs --output results
+```
+This will create a `results/` folder with JSON results for all PDFs in `input_docs/`.
 
-This will create another folder results which has results of pdf in input_docs
+---
 
 
 
-
- Used `pdfplumber` for text-layer PDFs and falls back to `pytesseract` OCR (via `pdf2image`) for image-based or scanned PDFs — handles both automatically.
+Used `pdfplumber` for text-layer PDFs and falls back to `pytesseract` OCR (via `pdf2image`) for image-based or scanned PDFs — handles both automatically.
