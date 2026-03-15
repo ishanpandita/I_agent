@@ -6,14 +6,17 @@ import sys
 from pathlib import Path
 
 
-def extract_text_from_pdf(pdf_path: str) -> str:
+# PDF TEXT EXTRACTION  (text layer + OCR fallback)
 
+def extract_text_from_pdf(pdf_path: str) -> str:
+    
     ocr_text   = _ocr_pdf(pdf_path)
     text_layer = ""
 
     try:
         import pdfplumber
         with pdfplumber.open(pdf_path) as pdf:
+
             pages_text = []
             for page in list(pdf.pages)[:2]:
                 t = page.extract_text()
@@ -23,8 +26,8 @@ def extract_text_from_pdf(pdf_path: str) -> str:
     except Exception as e:
         print(f"  [warn] pdfplumber failed: {e}")
 
-
     def has_filled_content(txt: str) -> bool:
+        """Heuristic: text has lowercase words or email-like patterns → filled form."""
         lower_words = re.findall(r'[a-z]{3,}', txt)
         return len(lower_words) > 3
 
@@ -52,40 +55,37 @@ def _ocr_pdf(pdf_path: str) -> str:
 
 # FIELD EXTRACTION
 
-# with the help Regex
+# using Regex 
 def _find(pattern: str, text: str, flags=re.IGNORECASE) -> str:
     m = re.search(pattern, text, flags)
     return m.group(1).strip() if m else ""
 
 
 def extract_fields(text: str) -> dict:
-    
+
     t = text
 
     fields = {}
 
-    # ── Helper: reject form labels, keep real filled values ──
     def clean(val: str) -> str | None:
         if not val:
             return None
         val = val.strip()
         if len(val) < 2:
             return None
-        # Always keep numeric-only values
+
         if re.match(r'^[\d\s\-,\.]+$', val):
             return val
-        # Reject all-caps-only strings (form section headers/labels)
+        
         if re.match(r'^[A-Z\s\(\)/,\.\-:]+$', val) and len(val) < 60:
             return None
-        # Reject "LABEL (abbreviation):" patterns
+        
         if re.match(r'^[A-Z][A-Z\s]+\s*\([A-Za-z/,\.\s]+\)\s*:?\s*$', val):
             return None
-        # Reject values ending with ':' that are mostly uppercase
+        
         if val.endswith(':') and re.match(r'^[A-Z\s\(\)/,\.]+', val) and len(val) < 40:
             return None
         return val
-
-    # POLICY INFORMATION
 
     fields["policy_number"] = (
         clean(_find(r"POLICY\s*NUMBER\s*\n\s*(\d{5,20})", t))
@@ -98,29 +98,29 @@ def extract_fields(text: str) -> dict:
     name_match = re.search(r"NAME\s+OF\s+INSURED[^\n]*\n\s*([^\n]{2,60})", t, re.IGNORECASE)
     if name_match:
         candidate = name_match.group(1).strip()
+
         if re.search(r"MARITAL|FEIN|appli|STATUS|MAILING", candidate, re.IGNORECASE):
             candidate = None
         fields["policyholder_name"] = clean(candidate)
     else:
         fields["policyholder_name"] = None
 
-    # INCIDENT INFORMATION
 
     fields["incident_date"] = (
         _find(r"DATE\s+OF\s+LOSS\s+AND\s+TIME[^\n]*\n\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})", t)
         or _find(r"DATE\s+OF\s+LOSS\s+AND\s+TIME[^\n]*?(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})", t)
-        or _find(r"(\d{1,2}/\d{1,2}/\d{4})", t)  # any date on page
+        or _find(r"(\d{1,2}/\d{1,2}/\d{4})", t) 
     ) or None
 
-    # TIME OF LOSS — same header row
+    # TIME OF LOSS
     fields["incident_time"] = (
         _find(r"DATE\s+OF\s+LOSS\s+AND\s+TIME[^\n]*\n\s*\S+\s+(\d{1,2}:\d{2}\s*(?:AM|PM)?)", t, re.IGNORECASE)
         or _find(r"(\d{1,2}:\d{2}\s*(?:AM|PM))", t, re.IGNORECASE)
     ) or None
 
-
+    # LOCATION OF LOSS 
     loc_main = ""
-    loc_match = re.search(r"LOCATION\s+OF\s+LOSS[^\n]*\n\s*([^\n]{3,80})", t, re.IGNORECASE)
+    loc_match = re.search(r"LOCATION\s+OF\s*LOSS[^\n]*\n\s*([^\n]{3,80})", t, re.IGNORECASE)
     if loc_match:
         candidate = loc_match.group(1).strip()
         if not re.match(r'^[A-Z\s\(\)/,\.\-:]+$', candidate):
@@ -134,7 +134,7 @@ def extract_fields(text: str) -> dict:
             loc_parts.append(part)
     fields["incident_location"] = ", ".join(loc_parts) if loc_parts else None
 
-    # DESCRIPTION OF ACCIDENT — free text in LOSS section
+    # DESCRIPTION OF ACCIDENT 
     desc_raw = (
         _find(
             r"DESCRIPTION\s+OF\s+ACCIDENT[^\n]*\n([\s\S]{5,600}?)"
@@ -162,11 +162,13 @@ def extract_fields(text: str) -> dict:
         or _find(r"\b(\d{10})\b", t)
     ) or None
 
+    # CLAIMANT EMAIL
     fields["claimant_email"] = (
         _find(r"E[-\s]?MAIL\s*ADDRESS[:\s]+([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})", t)
         or _find(r"([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})", t)
     ) or None
 
+    # THIRD PARTY NAME — OWNER'S NAME AND ADDRESS in OTHER VEHICLE section (page 2)
     owner_matches = list(re.finditer(
         r"OWNER'?S?\s+NAME\s+AND\s+ADDRESS[^\n]*\n\s*([^\n]{3,60})", t, re.IGNORECASE
     ))
@@ -183,7 +185,6 @@ def extract_fields(text: str) -> dict:
         _find(r"\b(\d{10})\b", other_sec) if other_sec else None
     ) or None
 
-    # ASSET DETAILS
 
     fields["asset_type"] = "Automobile"
 
@@ -200,8 +201,6 @@ def extract_fields(text: str) -> dict:
     # PLATE NUMBER
     fields["asset_plate"] = clean(_find(r"PLATE\s+NUMBER[:\s]+([A-Z0-9\-]{3,15})", t)) or None
 
-    # DAMAGE & ESTIMATE
-
     # ESTIMATE AMOUNT — numeric field at bottom of INSURED VEHICLE section
     raw_est = (
         _find(r"ESTIMATE\s+AMOUNT\s*[:\s]*([\d,\.]+)", t)
@@ -211,13 +210,14 @@ def extract_fields(text: str) -> dict:
     fields["estimated_damage"] = raw_est.strip() if raw_est else None
     fields["initial_estimate"] = fields["estimated_damage"]
 
+
     fields["report_number"] = clean(_find(r"REPORT\s+NUMBER[:\s]+([^\n]{3,30})", t)) or None
 
     return fields
 
 
 def _infer_claim_type(text: str) -> str | None:
-
+    
     legal_start = re.search(r"Applicable in Alabama", text, re.IGNORECASE)
     snippet = text[:legal_start.start()] if legal_start else text
 
@@ -247,10 +247,7 @@ def _infer_claim_type(text: str) -> str | None:
     return None
 
 
-
-# MISSING FIELDS DETECTION
-
-# All fields 
+# All fields
 MANDATORY_FIELDS = [
     "policy_number",
     "policyholder_name",
@@ -261,7 +258,6 @@ MANDATORY_FIELDS = [
     "claimant_name",
     "claimant_contact",
     "asset_type",
-    "asset_description",
     "estimated_damage",
     "initial_estimate",
 ]
@@ -275,8 +271,6 @@ def find_missing_fields(fields: dict) -> list:
             missing.append(f)
     return missing
 
-
-# ROUTING LOGIC
 
 FRAUD_KEYWORDS = ["fraud", "inconsistent", "staged", "fabricated", "fake",
                   "suspicious", "misrepresent"]
@@ -349,6 +343,7 @@ def determine_route(fields: dict, missing: list) -> tuple[str, str]:
     return route, " ".join(reasons)
 
 
+
 def process_file(pdf_path: str) -> dict:
     print(f"  Processing: {os.path.basename(pdf_path)}")
 
@@ -400,7 +395,6 @@ def process_folder(input_folder: str, output_folder: str):
             json.dump(result, f, indent=2, ensure_ascii=False)
         print(f"  → Saved: {out_file}")
 
-
 def main():
     parser = argparse.ArgumentParser(
         description="FNOL Autonomous Insurance Claims Processing Agent"
@@ -410,7 +404,7 @@ def main():
     args = parser.parse_args()
 
     print(f"\n{'='*55}")
-    print("  Ishan Agent")
+    print("  Ishan Agent ")
     print(f"{'='*55}")
     print(f"  Input  : {args.input}")
     print(f"  Output : {args.output}")

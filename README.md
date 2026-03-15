@@ -65,6 +65,8 @@ requirements.txt contains: pdf2image, pytesseract, pdfplumber
 
 ---
 
+## As i have already added three sample files in `input_docs/` so direct Run
+
 ## Run
 ```bash
 python agent.py --input input_docs --output results
@@ -76,3 +78,5 @@ This will create a `results/` folder with JSON results for all PDFs in `input_do
 
 
 Used `pdfplumber` for text-layer PDFs and falls back to `pytesseract` OCR (via `pdf2image`) for image-based or scanned PDFs — handles both automatically.
+
+## Also some fields doeesnot exist in the actual sample file 
