@@ -1,13 +1,3 @@
-"""
-FNOL (First Notice of Loss) Autonomous Claims Processing Agent
-
-Usage:
-    python agent.py --input <input_folder> --output <output_folder>
-
-Extracts fields from FNOL PDFs (text-based or image-based via OCR),
-identifies missing fields, classifies the claim, and routes it.
-"""
-
 import argparse
 import json
 import os
@@ -17,21 +7,13 @@ from pathlib import Path
 
 
 def extract_text_from_pdf(pdf_path: str) -> str:
-    """
-    Strategy:
-    1. Run OCR (pdf2image + Tesseract) on first 2 pages — captures filled-in values
-       in image-based PDFs (ACORD forms, scanned docs).
-    2. Run pdfplumber for text-layer PDFs — faster and more structured.
-    3. If OCR yields meaningful content (has lowercase or digits beyond just labels),
-       prefer it. Otherwise fall back to pdfplumber.
-    """
+
     ocr_text   = _ocr_pdf(pdf_path)
     text_layer = ""
 
     try:
         import pdfplumber
         with pdfplumber.open(pdf_path) as pdf:
-            # Only first 2 pages for FNOL data fields
             pages_text = []
             for page in list(pdf.pages)[:2]:
                 t = page.extract_text()
@@ -41,10 +23,8 @@ def extract_text_from_pdf(pdf_path: str) -> str:
     except Exception as e:
         print(f"  [warn] pdfplumber failed: {e}")
 
-    # OCR is preferred when it has actual filled-in content (mixed case text,
-    # email addresses, numbers embedded in context, etc.)
+
     def has_filled_content(txt: str) -> bool:
-        """Heuristic: text has lowercase words or email-like patterns → filled form."""
         lower_words = re.findall(r'[a-z]{3,}', txt)
         return len(lower_words) > 3
 
@@ -52,7 +32,6 @@ def extract_text_from_pdf(pdf_path: str) -> str:
         return ocr_text
     if text_layer and has_filled_content(text_layer):
         return text_layer
-    # Last resort: return whichever is longer
     return ocr_text if len(ocr_text) >= len(text_layer) else text_layer
 
 
@@ -71,38 +50,16 @@ def _ocr_pdf(pdf_path: str) -> str:
         return ""
 
 
-# ─────────────────────────────────────────────
 # FIELD EXTRACTION
-# ─────────────────────────────────────────────
 
-# Regex helpers
+# with the help Regex
 def _find(pattern: str, text: str, flags=re.IGNORECASE) -> str:
     m = re.search(pattern, text, flags)
     return m.group(1).strip() if m else ""
 
 
 def extract_fields(text: str) -> dict:
-    """
-    Parse raw OCR/text into structured FNOL fields mapped to actual ACORD form sections.
-    Field mapping based on ACORD 2 (2016/10) Automobile Loss Notice:
-
-    policy_number       → POLICY NUMBER (top centre)
-    policyholder_name   → NAME OF INSURED (INSURED section)
-    incident_date       → DATE OF LOSS AND TIME (top-right header)
-    incident_time       → DATE OF LOSS AND TIME (top-right header)
-    incident_location   → LOCATION OF LOSS + STREET + CITY/STATE/ZIP (LOSS section)
-    incident_description→ DESCRIPTION OF ACCIDENT (LOSS section)
-    claimant_name       → NAME OF INSURED (same as policyholder — insured is the claimant)
-    claimant_contact    → PRIMARY PHONE # (INSURED section)
-    claimant_email      → PRIMARY E-MAIL ADDRESS (INSURED section)
-    third_party_name    → OWNER'S NAME AND ADDRESS (OTHER VEHICLE section, page 2)
-    third_party_contact → PRIMARY PHONE # (OTHER VEHICLE section, page 2)
-    asset_type          → Always "Automobile" for this form
-    asset_description   → VEH# + YEAR + MAKE + MODEL (INSURED VEHICLE section)
-    asset_id_vin        → V.I.N. (INSURED VEHICLE section)
-    estimated_damage    → ESTIMATE AMOUNT (INSURED VEHICLE bottom)
-    initial_estimate    → same as estimated_damage
-    """
+    
     t = text
 
     fields = {}
@@ -128,12 +85,8 @@ def extract_fields(text: str) -> dict:
             return None
         return val
 
-    # ════════════════════════════════════════════
     # POLICY INFORMATION
-    # ════════════════════════════════════════════
 
-    # POLICY NUMBER — on its own line below "POLICY NUMBER" label
-    # OCR quirk: appears as "CONTACT 12012012011" on same line as CONTACT label
     fields["policy_number"] = (
         clean(_find(r"POLICY\s*NUMBER\s*\n\s*(\d{5,20})", t))
         or clean(_find(r"POLICY\s*NUMBER[:\s]+(\d{5,20})", t))
@@ -142,24 +95,17 @@ def extract_fields(text: str) -> dict:
         or clean(_find(r"CONTACT\s+(\d{8,13})\b", t))
     )
 
-    # POLICYHOLDER NAME — NAME OF INSURED field
-    # OCR puts the name on one line, then "if appli MARITAL STATUS /" on next — skip that
     name_match = re.search(r"NAME\s+OF\s+INSURED[^\n]*\n\s*([^\n]{2,60})", t, re.IGNORECASE)
     if name_match:
         candidate = name_match.group(1).strip()
-        # Reject if it looks like a form label or the marital status noise line
         if re.search(r"MARITAL|FEIN|appli|STATUS|MAILING", candidate, re.IGNORECASE):
             candidate = None
         fields["policyholder_name"] = clean(candidate)
     else:
         fields["policyholder_name"] = None
 
-    # ════════════════════════════════════════════
     # INCIDENT INFORMATION
-    # ════════════════════════════════════════════
 
-    # DATE OF LOSS — from "DATE OF LOSS AND TIME" top-right header area
-    # OCR often puts the date on the line after this header or on same line
     fields["incident_date"] = (
         _find(r"DATE\s+OF\s+LOSS\s+AND\s+TIME[^\n]*\n\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})", t)
         or _find(r"DATE\s+OF\s+LOSS\s+AND\s+TIME[^\n]*?(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})", t)
@@ -172,13 +118,11 @@ def extract_fields(text: str) -> dict:
         or _find(r"(\d{1,2}:\d{2}\s*(?:AM|PM))", t, re.IGNORECASE)
     ) or None
 
-    # LOCATION OF LOSS — OCR often adds noise chars after label e.g. "LOCATION OF LOSS. ; ;"
-    # The actual value is on the NEXT non-empty line after the label
+
     loc_main = ""
     loc_match = re.search(r"LOCATION\s+OF\s+LOSS[^\n]*\n\s*([^\n]{3,80})", t, re.IGNORECASE)
     if loc_match:
         candidate = loc_match.group(1).strip()
-        # Skip if it's all caps (form label like "POLICE OR FIRE DEPARTMENT CONTACTED")
         if not re.match(r'^[A-Z\s\(\)/,\.\-:]+$', candidate):
             loc_main = candidate
     loc_street  = clean(_find(r"STREET\s*:\s*([^\n]{3,80})", t)) or ""
@@ -209,28 +153,20 @@ def extract_fields(text: str) -> dict:
     else:
         fields["incident_description"] = None
 
-    # ════════════════════════════════════════════
-    # INVOLVED PARTIES
-    # ════════════════════════════════════════════
 
-    # CLAIMANT NAME — same as policyholder (insured is the claimant on this form)
     fields["claimant_name"] = fields["policyholder_name"]
 
-    # CLAIMANT CONTACT — PRIMARY PHONE # in INSURED section
-    # In OCR the phone appears directly below "PRIMARY PHONE #" label or after DOB line
     fields["claimant_contact"] = (
         _find(r"PRIMARY\s+PHONE\s*#[^\n]*\n\s*(\d{7,15})", t)
         or _find(r"DATE\s+OF\s+BIRTH[^\n]*\n\s*[\d/]+\s*\n\s*(\d{7,15})", t)
         or _find(r"\b(\d{10})\b", t)
     ) or None
 
-    # CLAIMANT EMAIL
     fields["claimant_email"] = (
         _find(r"E[-\s]?MAIL\s*ADDRESS[:\s]+([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})", t)
         or _find(r"([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})", t)
     ) or None
 
-    # THIRD PARTY NAME — OWNER'S NAME AND ADDRESS in OTHER VEHICLE section (page 2)
     owner_matches = list(re.finditer(
         r"OWNER'?S?\s+NAME\s+AND\s+ADDRESS[^\n]*\n\s*([^\n]{3,60})", t, re.IGNORECASE
     ))
@@ -239,7 +175,6 @@ def extract_fields(text: str) -> dict:
     else:
         fields["third_party_name"] = None
 
-    # THIRD PARTY CONTACT — phone in OTHER VEHICLE section (page 2)
     other_sec = _find(
         r"OTHER\s+VEHICLE[^\n]*\n([\s\S]{0,500}?)(?:\nREMARKS|\nINJURED|\Z)",
         t, re.IGNORECASE
@@ -248,15 +183,10 @@ def extract_fields(text: str) -> dict:
         _find(r"\b(\d{10})\b", other_sec) if other_sec else None
     ) or None
 
-    # ════════════════════════════════════════════
     # ASSET DETAILS
-    # ════════════════════════════════════════════
 
-    # ASSET TYPE — always "Automobile" for ACORD auto loss notice
     fields["asset_type"] = "Automobile"
 
-    # ASSET DESCRIPTION — VEH# and YEAR from INSURED VEHICLE section
-    # OCR of the vehicle row: "ven # swift  YEAR 2020  MAKE: ..."
     veh_num   = clean(_find(r"[Vv][Ee][Hh]\s*#\s*([A-Za-z0-9]+)\s+(?:YEAR|\d{4})", t)) or \
                 clean(_find(r"[Vv][Ee][Hh]\s*#\s+([A-Za-z0-9]{2,15})\b", t)) or ""
     year_val  = _find(r"YEAR\s*[:\s]\s*(\d{4})\b", t) or ""
@@ -265,15 +195,12 @@ def extract_fields(text: str) -> dict:
     veh_parts = [x for x in [veh_num, year_val, make_val, model_val] if x and len(x) > 1]
     fields["asset_description"] = " ".join(veh_parts).strip() or None
 
-    # VIN
     fields["asset_id_vin"] = _find(r"V\.?I\.?N\.?[:\s]+([A-HJ-NPR-Z0-9]{5,17})", t) or None
 
     # PLATE NUMBER
     fields["asset_plate"] = clean(_find(r"PLATE\s+NUMBER[:\s]+([A-Z0-9\-]{3,15})", t)) or None
 
-    # ════════════════════════════════════════════
     # DAMAGE & ESTIMATE
-    # ════════════════════════════════════════════
 
     # ESTIMATE AMOUNT — numeric field at bottom of INSURED VEHICLE section
     raw_est = (
@@ -284,42 +211,29 @@ def extract_fields(text: str) -> dict:
     fields["estimated_damage"] = raw_est.strip() if raw_est else None
     fields["initial_estimate"] = fields["estimated_damage"]
 
-    # ════════════════════════════════════════════
-    # OTHER
-    # ════════════════════════════════════════════
-
     fields["report_number"] = clean(_find(r"REPORT\s+NUMBER[:\s]+([^\n]{3,30})", t)) or None
 
     return fields
 
 
 def _infer_claim_type(text: str) -> str | None:
-    """
-    Infer claim type from text, avoiding false positives from legal boilerplate
-    and form section headers like "INJURED" (which is just a table label).
-    """
-    # Strip legal state-law boilerplate (pages 3-4 of ACORD form)
+
     legal_start = re.search(r"Applicable in Alabama", text, re.IGNORECASE)
     snippet = text[:legal_start.start()] if legal_start else text
 
-    # Narrow to description section if present
     desc_match = re.search(
         r"DESCRIPTION\s+OF\s+ACCIDENT[^\n]*\n([\s\S]{0,600}?)(?:\n\s*(?:INSURED\s+VEHICLE|INJURED\n|WITNESSES)|\Z)",
         snippet, re.IGNORECASE
     )
     desc_section = desc_match.group(1) if desc_match else ""
 
-    # Injury: only match in description content (real narrative), not section headers
-    # "INJURED" alone on a line is a form header; injury words in narrative sentences are real
     injury_pattern = re.compile(
         r"\b(?:injuries|injured\s+\w|bodily\s+injur|personal\s+injur|sustained\s+injur|serious\s+injur)\b",
         re.IGNORECASE
     )
-    # Check description section first; fall back to full snippet (for short input strings)
     if injury_pattern.search(desc_section) or injury_pattern.search(snippet):
         return "injury"
 
-    # For theft/fire/flood check description then snippet
     for scope in [desc_section, snippet]:
         if re.search(r"\bTHEFT\b|\bSTOLEN\b", scope, re.IGNORECASE):
             return "theft"
@@ -333,11 +247,10 @@ def _infer_claim_type(text: str) -> str | None:
     return None
 
 
-# ─────────────────────────────────────────────
-# MISSING FIELDS DETECTION
-# ─────────────────────────────────────────────
 
-# All fields considered mandatory per assessment brief
+# MISSING FIELDS DETECTION
+
+# All fields 
 MANDATORY_FIELDS = [
     "policy_number",
     "policyholder_name",
@@ -363,9 +276,7 @@ def find_missing_fields(fields: dict) -> list:
     return missing
 
 
-# ─────────────────────────────────────────────
 # ROUTING LOGIC
-# ─────────────────────────────────────────────
 
 FRAUD_KEYWORDS = ["fraud", "inconsistent", "staged", "fabricated", "fake",
                   "suspicious", "misrepresent"]
@@ -384,10 +295,7 @@ def _parse_damage_amount(val: str | None) -> float | None:
 
 
 def determine_route(fields: dict, missing: list) -> tuple[str, str]:
-    """
-    Returns (route, reasoning) based on assessment brief rules.
-    Priority: Investigation Flag > Specialist Queue > Manual Review > Fast-track
-    """
+   
     reasons = []
     route = None
 
@@ -441,10 +349,6 @@ def determine_route(fields: dict, missing: list) -> tuple[str, str]:
     return route, " ".join(reasons)
 
 
-# ─────────────────────────────────────────────
-# MAIN PROCESSOR
-# ─────────────────────────────────────────────
-
 def process_file(pdf_path: str) -> dict:
     print(f"  Processing: {os.path.basename(pdf_path)}")
 
@@ -463,7 +367,6 @@ def process_file(pdf_path: str) -> dict:
     missing  = find_missing_fields(fields)
     route, reasoning = determine_route(fields, missing)
 
-    # Clean up None values for JSON clarity
     extracted_clean = {k: v for k, v in fields.items() if v is not None}
 
     return {
